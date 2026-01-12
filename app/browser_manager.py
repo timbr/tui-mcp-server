@@ -1,32 +1,41 @@
+"""Browser manager using Playwright Python API for screenshots."""
+
 import asyncio
 import os
 import tempfile
-from pathlib import Path
 from typing import Optional
 from playwright.async_api import async_playwright, Browser, Page
 
 
 class BrowserManager:
-    """Manages the headless browser instance for screenshots."""
+    """Manages browser automation and screenshot capture using Playwright."""
     
-    def __init__(self):
+    def __init__(self, server_url: str = "http://localhost:8000"):
+        self.server_url = server_url
         self.browser: Optional[Browser] = None
         self.page: Optional[Page] = None
         self.playwright = None
-        self.screenshot_dir = tempfile.mkdtemp(prefix="tui_mcp_")
     
     async def start(self):
-        """Start the headless browser and navigate to the terminal page."""
+        """Initialize browser manager (lazy initialization)."""
+        print("Browser manager initialized (lazy mode)")
+    
+    async def _ensure_browser(self):
+        """Ensure browser is started (lazy initialization)."""
+        if self.page:
+            return  # Already initialized
+        
         try:
+            # Start Playwright
             self.playwright = await async_playwright().start()
             
-            # Launch the browser
+            # Launch browser
             self.browser = await self.playwright.chromium.launch(
                 headless=True,
                 args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-dev-shm-usage",
-                    "--no-sandbox",
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu',
+                    '--no-sandbox',
                 ]
             )
             
@@ -35,23 +44,20 @@ class BrowserManager:
                 viewport={"width": 1024, "height": 768}
             )
             
-            # Navigate to the local server
-            # We'll wait a bit for the server to be ready
-            await asyncio.sleep(1)
+            # Navigate to the terminal page
+            await self.page.goto(f"{self.server_url}/", wait_until="networkidle")
             
-            try:
-                await self.page.goto("http://localhost:8000/", wait_until="networkidle")
-            except Exception as e:
-                print(f"Warning: Could not navigate immediately: {e}")
-                # The page might still load, we'll try again on first screenshot
+            # Wait for Xterm to initialize
+            await self.page.wait_for_selector(".xterm", timeout=5000)
             
-            print("Browser started successfully")
+            print("Browser initialized and connected to terminal")
+            
         except Exception as e:
             print(f"Error starting browser: {e}")
             raise
     
     async def stop(self):
-        """Stop the browser and clean up."""
+        """Stop the browser."""
         if self.page:
             try:
                 await self.page.close()
@@ -72,45 +78,29 @@ class BrowserManager:
         
         print("Browser stopped")
     
-    async def take_screenshot(self) -> Optional[str]:
+    async def take_screenshot(self) -> str:
         """Take a screenshot of the terminal."""
+        # Ensure browser is initialized
+        await self._ensure_browser()
+        
         if not self.page:
-            print("Page not initialized")
-            return None
+            raise RuntimeError("Browser not initialized")
         
         try:
-            # Ensure we're on the right page
-            if self.page.url != "http://localhost:8000/":
-                try:
-                    await self.page.goto("http://localhost:8000/", wait_until="networkidle", timeout=5000)
-                except Exception as e:
-                    print(f"Warning: Could not navigate to page: {e}")
+            # Wait for the terminal to be ready
+            await self.page.wait_for_selector(".xterm-screen", timeout=2000)
             
-            # Wait for the xterm screen element to be present and have content
-            try:
-                await self.page.wait_for_selector('.xterm-screen', timeout=3000)
-                print("Xterm screen element found")
-            except Exception as e:
-                print(f"Warning: Xterm screen not found: {e}")
+            # Wait longer for content to render and be displayed
+            await asyncio.sleep(2.0)
             
-            # Additional wait for rendering and content
-            await asyncio.sleep(2)
+            # Take screenshot
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                screenshot_path = f.name
             
-            # Get the terminal container element
-            terminal_element = await self.page.query_selector("#terminal")
+            await self.page.screenshot(path=screenshot_path)
             
-            if terminal_element:
-                # Take a screenshot of just the terminal element
-                screenshot_path = os.path.join(self.screenshot_dir, "terminal.png")
-                await terminal_element.screenshot(path=screenshot_path)
-            else:
-                # Fallback: screenshot the entire viewport
-                screenshot_path = os.path.join(self.screenshot_dir, "terminal.png")
-                await self.page.screenshot(path=screenshot_path)
-            
-            print(f"Screenshot saved to {screenshot_path}")
             return screenshot_path
-        
+            
         except Exception as e:
             print(f"Error taking screenshot: {e}")
-            return None
+            raise

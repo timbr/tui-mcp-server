@@ -1,4 +1,4 @@
-import asyncio
+#!/usr/bin/env python3
 import os
 import pty
 import subprocess
@@ -50,18 +50,12 @@ async def lifespan(app: FastAPI):
     print("Server shut down")
 
 
-# Create FastAPI app
-app = FastAPI(title="TUI MCP Server", version="1.0.0", lifespan=lifespan)
+# Create the FastAPI app
+app = FastAPI(lifespan=lifespan)
 
 # Mount static files
-static_dir = Path(__file__).parent.parent / "static"
-app.mount("/static", StaticFiles(directory=static_dir), name="static")
-
-
-@app.get("/")
-async def root():
-    """Serve the main HTML page."""
-    return FileResponse(static_dir / "index.html")
+app.mount("/lib", StaticFiles(directory="static/lib"), name="lib")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 @app.websocket("/ws")
@@ -75,31 +69,55 @@ async def websocket_endpoint(websocket: WebSocket):
     
     # Register the WebSocket connection
     connection_id = terminal_manager.add_connection(websocket)
+    print(f"WebSocket connection registered: {connection_id}")
     
     try:
+        # Keep the connection open and handle incoming data
         while True:
-            # Receive data from the client
-            data = await websocket.receive_text()
-            
-            # Check if it's a resize message
-            if data.startswith('{"type":"resize"'):
-                import json
-                try:
-                    msg = json.loads(data)
-                    cols = msg.get('cols', 80)
-                    rows = msg.get('rows', 24)
-                    terminal_manager.resize_pty(cols, rows)
-                except json.JSONDecodeError:
-                    pass
-            else:
-                # Send regular input to the PTY
-                await terminal_manager.write_to_pty(data)
+            try:
+                # Receive data from the client (with timeout to allow graceful shutdown)
+                import asyncio
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=60.0)
+                
+                # Check if it's a resize message
+                if data.startswith('{"type":"resize"'):
+                    import json
+                    try:
+                        msg = json.loads(data)
+                        cols = msg.get('cols', 80)
+                        rows = msg.get('rows', 24)
+                        terminal_manager.resize_pty(cols, rows)
+                    except json.JSONDecodeError:
+                        pass
+                else:
+                    # Send regular input to the PTY
+                    await terminal_manager.write_to_pty(data)
+            except asyncio.TimeoutError:
+                # Timeout is OK, just continue the loop
+                continue
     
     except WebSocketDisconnect:
+        print(f"WebSocket disconnected: {connection_id}")
         terminal_manager.remove_connection(connection_id)
     except Exception as e:
         print(f"WebSocket error: {e}")
         terminal_manager.remove_connection(connection_id)
+
+
+@app.get("/")
+async def root():
+    """Serve the terminal page."""
+    return FileResponse("static/index.html")
+
+
+@app.get("/health")
+async def health():
+    """Health check endpoint."""
+    return {
+        "status": "healthy",
+        "terminal_ready": terminal_manager is not None,
+        "browser_ready": browser_manager is not None
+    }
 
 
 class CommandRequest(BaseModel):
@@ -130,20 +148,6 @@ async def mcp_send_keys(request: KeysRequest):
     return {"status": "keys sent"}
 
 
-@app.get("/mcp/screenshot")
-async def mcp_screenshot():
-    """Capture a PNG screenshot of the terminal."""
-    if not browser_manager:
-        raise HTTPException(status_code=503, detail="Browser manager not initialized")
-    
-    screenshot_path = await browser_manager.take_screenshot()
-    
-    if not screenshot_path or not os.path.exists(screenshot_path):
-        raise HTTPException(status_code=500, detail="Failed to capture screenshot")
-    
-    return FileResponse(screenshot_path, media_type="image/png")
-
-
 class WaitRequest(BaseModel):
     timeout_seconds: int = 5
 
@@ -154,21 +158,23 @@ async def mcp_wait_for_stable_output(request: WaitRequest):
     if not terminal_manager:
         raise HTTPException(status_code=503, detail="Terminal manager not initialized")
     
-    try:
-        await terminal_manager.wait_for_stable_output(request.timeout_seconds)
-        return {"status": "output is stable"}
-    except asyncio.TimeoutError:
-        return {"status": "error", "message": "timeout waiting for stable output"}
+    await terminal_manager.wait_for_stable_output(request.timeout_seconds)
+    return {"status": "output is stable"}
 
 
-@app.get("/health")
-async def health():
-    """Health check endpoint."""
-    return {
-        "status": "healthy",
-        "terminal_ready": terminal_manager is not None,
-        "browser_ready": browser_manager is not None,
-    }
+@app.get("/mcp/screenshot")
+async def mcp_screenshot():
+    """Take a screenshot of the terminal."""
+    if not browser_manager:
+        raise HTTPException(status_code=503, detail="Browser manager not initialized")
+    
+    screenshot_path = await browser_manager.take_screenshot()
+    
+    if not screenshot_path or not os.path.exists(screenshot_path):
+        raise HTTPException(status_code=500, detail="Failed to take screenshot")
+    
+    # Return the screenshot as a PNG file
+    return FileResponse(screenshot_path, media_type="image/png")
 
 
 if __name__ == "__main__":

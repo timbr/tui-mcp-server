@@ -1,14 +1,14 @@
 import asyncio
 import os
 import pty
-import subprocess
 import signal
 import fcntl
 import struct
 import termios
-from typing import Dict, Optional, Set
+from typing import Dict, Optional, List
 from fastapi import WebSocket
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 
 class TerminalManager:
@@ -23,43 +23,55 @@ class TerminalManager:
         self.read_task: Optional[asyncio.Task] = None
         self.last_output_time = time.time()
         self.output_event = asyncio.Event()
+        self.executor = ThreadPoolExecutor(max_workers=1)
+        self.cols = 80
+        self.rows = 24
     
     async def start(self):
         """Start the PTY and spawn a shell process."""
         try:
-            # Fork and create a pseudo-terminal
-            self.process_pid, self.master_fd = pty.openpty()
+            # Create a PTY
+            self.master_fd, self.slave_fd = pty.openpty()
+            
+            # Fork to create child process
+            self.process_pid = os.fork()
             
             if self.process_pid == 0:
                 # Child process
+                # Close the master FD in the child
+                os.close(self.master_fd)
+                
                 # Create a new session
                 os.setsid()
                 
-                # Open the slave side of the PTY
-                slave_fd = os.open(os.ttyname(self.master_fd), os.O_RDWR)
+                # Make the slave the controlling terminal
+                os.dup2(self.slave_fd, 0)  # stdin
+                os.dup2(self.slave_fd, 1)  # stdout
+                os.dup2(self.slave_fd, 2)  # stderr
                 
-                # Duplicate the slave FD to stdin, stdout, stderr
-                os.dup2(slave_fd, 0)
-                os.dup2(slave_fd, 1)
-                os.dup2(slave_fd, 2)
+                # Close the slave FD if it's > 2
+                if self.slave_fd > 2:
+                    os.close(self.slave_fd)
                 
-                # Close the original slave FD
-                if slave_fd > 2:
-                    os.close(slave_fd)
-                
-                # Execute the shell
+                # Execute bash
                 os.execv("/bin/bash", ["/bin/bash"])
+                # Never reached
+                os._exit(1)
             else:
                 # Parent process
-                # Set the PTY to non-blocking mode
+                # Close the slave FD in the parent
+                os.close(self.slave_fd)
+                self.slave_fd = None
+                
+                # Set the master to non-blocking
                 flags = fcntl.fcntl(self.master_fd, fcntl.F_GETFL)
                 fcntl.fcntl(self.master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
                 
                 # Set initial terminal size
-                self.resize_pty(80, 24)
+                self.resize_pty(self.cols, self.rows)
                 
                 # Start the read task
-                self.read_task = asyncio.create_task(self._read_from_pty())
+                self.read_task = asyncio.create_task(self._read_from_pty_async())
                 
                 print(f"PTY started with PID {self.process_pid}")
         except Exception as e:
@@ -77,15 +89,16 @@ class TerminalManager:
         
         if self.process_pid:
             try:
-                os.kill(self.process_pid, signal.SIGTERM)
-                # Wait a bit for graceful shutdown
-                await asyncio.sleep(0.5)
+                # Terminate the process group
+                os.killpg(os.getpgid(self.process_pid), signal.SIGTERM)
                 try:
-                    os.kill(self.process_pid, signal.SIGKILL)
-                except ProcessLookupError:
+                    os.waitpid(self.process_pid, 0)
+                except OSError:
                     pass
             except ProcessLookupError:
                 pass
+            except Exception as e:
+                print(f"Error terminating process: {e}")
         
         if self.master_fd is not None:
             try:
@@ -93,6 +106,7 @@ class TerminalManager:
             except OSError:
                 pass
         
+        self.executor.shutdown(wait=False)
         print("PTY stopped")
     
     def add_connection(self, websocket: WebSocket) -> str:
@@ -115,7 +129,13 @@ class TerminalManager:
             return
         
         try:
-            os.write(self.master_fd, data.encode('utf-8', errors='replace'))
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                self.executor,
+                os.write,
+                self.master_fd,
+                data.encode('utf-8', errors='replace')
+            )
         except OSError as e:
             print(f"Error writing to PTY: {e}")
     
@@ -128,44 +148,55 @@ class TerminalManager:
             # Set the terminal size
             s = struct.pack('HHHH', rows, cols, 0, 0)
             fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, s)
+            self.cols = cols
+            self.rows = rows
             print(f"PTY resized to {cols}x{rows}")
         except OSError as e:
             print(f"Error resizing PTY: {e}")
     
-    async def _read_from_pty(self):
-        """Continuously read from the PTY and broadcast to all connections."""
-        buffer = b""
+    def _read_blocking(self) -> bytes:
+        """Blocking read from PTY (to be run in executor)."""
+        try:
+            chunk = os.read(self.master_fd, 4096)
+            return chunk
+        except OSError:
+            return b""
+    
+    async def _read_from_pty_async(self):
+        """Continuously read from the PTY and broadcast to WebSocket clients."""
+        loop = asyncio.get_event_loop()
         
         while True:
             try:
-                # Read from the PTY
-                chunk = os.read(self.master_fd, 4096)
+                # Use executor to do blocking read
+                chunk = await loop.run_in_executor(self.executor, self._read_blocking)
                 
                 if not chunk:
                     # PTY closed
                     await self._broadcast("PTY closed\r\n")
                     break
                 
-                # Decode and broadcast
+                # Decode and process
                 text = chunk.decode('utf-8', errors='replace')
+                
+                # Broadcast to WebSocket clients
                 await self._broadcast(text)
                 
                 # Update the last output time
                 self.last_output_time = time.time()
                 self.output_event.set()
                 
-            except BlockingIOError:
-                # No data available, yield control
-                await asyncio.sleep(0.01)
-            except OSError as e:
-                print(f"Error reading from PTY: {e}")
+            except asyncio.CancelledError:
                 break
             except Exception as e:
-                print(f"Unexpected error in read loop: {e}")
-                break
+                print(f"Error in read loop: {e}")
+                await asyncio.sleep(0.1)
     
     async def _broadcast(self, data: str):
         """Broadcast data to all connected WebSockets."""
+        if len(self.connections) > 0:
+            print(f"DEBUG: Broadcasting {len(data)} bytes to {len(self.connections)} connections: {repr(data[:50])}")
+        
         disconnected = []
         
         for connection_id, websocket in self.connections.items():
@@ -191,13 +222,11 @@ class TerminalManager:
             # Wait for either output or timeout
             try:
                 await asyncio.wait_for(self.output_event.wait(), timeout=stable_duration)
-                # Output occurred, reset the timer
+                # Output occurred, continue waiting
             except asyncio.TimeoutError:
                 # No output for stable_duration, we're stable
                 return
             
             # Check if we've exceeded the total timeout
             if time.time() - start_time >= timeout_seconds:
-                raise asyncio.TimeoutError("Timeout waiting for stable output")
-        
-        raise asyncio.TimeoutError("Timeout waiting for stable output")
+                return
