@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel
 import uvicorn
 
 from app.terminal_manager import TerminalManager
@@ -101,23 +102,31 @@ async def websocket_endpoint(websocket: WebSocket):
         terminal_manager.remove_connection(connection_id)
 
 
+class CommandRequest(BaseModel):
+    command: str
+
+
 @app.post("/mcp/run")
-async def mcp_run(command: str):
+async def mcp_run(request: CommandRequest):
     """Execute a command in the terminal."""
     if not terminal_manager:
         raise HTTPException(status_code=503, detail="Terminal manager not initialized")
     
-    await terminal_manager.write_to_pty(command + "\n")
+    await terminal_manager.write_to_pty(request.command + "\n")
     return {"status": "command sent"}
 
 
+class KeysRequest(BaseModel):
+    keys: str
+
+
 @app.post("/mcp/send_keys")
-async def mcp_send_keys(keys: str):
+async def mcp_send_keys(request: KeysRequest):
     """Send keystrokes to the terminal."""
     if not terminal_manager:
         raise HTTPException(status_code=503, detail="Terminal manager not initialized")
     
-    await terminal_manager.write_to_pty(keys)
+    await terminal_manager.write_to_pty(request.keys)
     return {"status": "keys sent"}
 
 
@@ -135,14 +144,18 @@ async def mcp_screenshot():
     return FileResponse(screenshot_path, media_type="image/png")
 
 
+class WaitRequest(BaseModel):
+    timeout_seconds: int = 5
+
+
 @app.post("/mcp/wait_for_stable_output")
-async def mcp_wait_for_stable_output(timeout_seconds: int = 5):
+async def mcp_wait_for_stable_output(request: WaitRequest):
     """Wait for terminal output to stabilize."""
     if not terminal_manager:
         raise HTTPException(status_code=503, detail="Terminal manager not initialized")
     
     try:
-        await terminal_manager.wait_for_stable_output(timeout_seconds)
+        await terminal_manager.wait_for_stable_output(request.timeout_seconds)
         return {"status": "output is stable"}
     except asyncio.TimeoutError:
         return {"status": "error", "message": "timeout waiting for stable output"}

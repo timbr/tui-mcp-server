@@ -1,9 +1,17 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
 # Python
-__pycache__/
+__pycache__
 *.py[cod]
 *$py.class
 *.so
 .Python
+env/
+venv/
+ENV/
 build/
 develop-eggs/
 dist/
@@ -20,28 +28,23 @@ wheels/
 .installed.cfg
 *.egg
 
-# Virtual environments
-venv/
-env/
-ENV/
-
 # IDE
-.vscode/
-.idea/
+.vscode
+.idea
 *.swp
 *.swo
 *~
 .DS_Store
 
 # Testing
-.pytest_cache/
+.pytest_cache
 .coverage
-htmlcov/
+htmlcov
 test_screenshot.png
 test_workflow_screenshot.png
 
 # Playwright
-.playwright/
+.playwright
 
 # Temporary files
 *.tmp
@@ -53,5 +56,19 @@ test_workflow_screenshot.png
 .env
 .env.local
 
+# Documentation
+*.md
+docs/
+
+# CI/CD
+.github
+.gitlab-ci.yml
+.travis.yml
+
 # Screenshots
 screenshots/
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
