@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   tui-mcp-server:
     build:
@@ -16,7 +14,6 @@ services:
       - ./screenshots:/app/screenshots
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
