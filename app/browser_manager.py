@@ -86,8 +86,15 @@ class BrowserManager:
                 except Exception as e:
                     print(f"Warning: Could not navigate to page: {e}")
             
-            # Wait a bit for the terminal to render
-            await asyncio.sleep(0.5)
+            # Wait for the xterm screen element to be present and have content
+            try:
+                await self.page.wait_for_selector('.xterm-screen', timeout=3000)
+                print("Xterm screen element found")
+            except Exception as e:
+                print(f"Warning: Xterm screen not found: {e}")
+            
+            # Additional wait for rendering and content
+            await asyncio.sleep(2)
             
             # Get the terminal container element
             terminal_element = await self.page.query_selector("#terminal")

@@ -4,36 +4,182 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TUI Development Terminal</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+    <link rel="stylesheet" href="/static/lib/xterm.css" />
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-        body {
-            width: 100vw;
-            height: 100vh;
-            background-color: #000;
+        html, body {
+            width: 100%;
+            height: 100%;
+            background-color: #000000;
+            color: #ffffff;
             font-family: 'Courier New', monospace;
             overflow: hidden;
         }
         #terminal {
             width: 100%;
             height: 100%;
-            display: flex;
-            flex-direction: column;
+            display: block;
         }
-        .terminal-container {
-            flex: 1;
-            overflow: hidden;
+        .xterm {
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            color: #ffffff;
+            background-color: #000000;
+            padding: 0;
+            margin: 0;
         }
     </style>
 </head>
 <body>
-    <div id="terminal" class="terminal-container"></div>
-    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
-    <script src="/static/main.js"></script>
+    <div id="terminal"></div>
+    
+    <script src="/static/lib/xterm.js"></script>
+    <script>
+        console.log('Xterm.js loaded');
+        
+        // Initialize terminal
+        function initializeTerminal() {
+            console.log('initializeTerminal called');
+            
+            try {
+                // Check if Terminal class is available
+                if (typeof Terminal === 'undefined') {
+                    console.error('Terminal class not found');
+                    return;
+                }
+                
+                console.log('Terminal class found');
+                
+                // Initialize Xterm.js terminal
+                const terminal = new Terminal({
+                    cursorBlink: true,
+                    cursorStyle: 'block',
+                    fontSize: 20,
+                    fontFamily: 'Courier New, monospace',
+                    theme: {
+                        background: '#000000',
+                        foreground: '#ffffff',
+                        cursor: '#ffffff',
+                    },
+                    scrollback: 1000,
+                    convertEol: true,
+                    allowTransparency: false,
+                    cols: 60,
+                    rows: 20,
+                });
+                
+                console.log('Terminal instance created');
+                
+                // Get the terminal container
+                const terminalContainer = document.getElementById('terminal');
+                
+                if (!terminalContainer) {
+                    console.error('Terminal container not found');
+                    return;
+                }
+                
+                console.log('Opening terminal...');
+                
+                // Open the terminal in the container
+                terminal.open(terminalContainer);
+                
+                console.log('Terminal opened successfully');
+                console.log('Terminal size:', terminal.cols, 'x', terminal.rows);
+                
+                // Establish WebSocket connection
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${protocol}//${window.location.host}/ws`;
+                console.log('Connecting to WebSocket:', wsUrl);
+                
+                const ws = new WebSocket(wsUrl);
+                
+                // Store ws in window for debugging
+                window.ws = ws;
+                
+                ws.onopen = function() {
+                    console.log('WebSocket connected');
+                    terminal.write('Connected to TUI MCP Server\r\n');
+                    terminal.write('Waiting for shell...\r\n');
+                };
+                
+                ws.onmessage = function(event) {
+                    console.log('Received data:', event.data.length, 'bytes');
+                    terminal.write(event.data);
+                };
+                
+                ws.onerror = function(error) {
+                    console.error('WebSocket error:', error);
+                    terminal.write('\r\n[ERROR] WebSocket connection failed\r\n');
+                };
+                
+                ws.onclose = function() {
+                    console.log('WebSocket disconnected');
+                    terminal.write('\r\n[DISCONNECTED] WebSocket connection closed\r\n');
+                };
+                
+                // Send terminal input to the server
+                terminal.onData(function(data) {
+                    console.log('Sending data:', data.length, 'bytes');
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send(data);
+                    } else {
+                        console.warn('WebSocket not open, cannot send data');
+                    }
+                });
+                
+                // Handle terminal resize
+                window.addEventListener('resize', function() {
+                    console.log('Window resized');
+                    // Manual resize - calculate based on container size
+                    const container = document.getElementById('terminal');
+                    if (container && terminal) {
+                        // Get the computed style of the terminal element
+                        const style = window.getComputedStyle(container);
+                        const width = container.clientWidth;
+                        const height = container.clientHeight;
+                        console.log('Container size:', width, 'x', height);
+                        
+                        // Approximate character dimensions (14px font)
+                        const charWidth = 8.4;  // Average width for monospace
+                        const charHeight = 17;   // Line height
+                        
+                        const cols = Math.max(2, Math.floor(width / charWidth));
+                        const rows = Math.max(1, Math.floor(height / charHeight));
+                        
+                        console.log('Calculated terminal size:', cols, 'x', rows);
+                        
+                        if (cols !== terminal.cols || rows !== terminal.rows) {
+                            terminal.resize(cols, rows);
+                            console.log('Terminal resized to:', cols, 'x', rows);
+                            
+                            // Send resize information to the server
+                            if (ws.readyState === WebSocket.OPEN) {
+                                ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+                            }
+                        }
+                    }
+                });
+                
+                // Focus the terminal
+                terminal.focus();
+                console.log('Terminal initialized and focused');
+                
+            } catch (error) {
+                console.error('Error initializing terminal:', error);
+                console.error('Stack:', error.stack);
+            }
+        }
+        
+        // Initialize when DOM is ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initializeTerminal);
+        } else {
+            initializeTerminal();
+        }
+    </script>
 </body>
 </html>
