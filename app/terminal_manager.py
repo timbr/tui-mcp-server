@@ -26,6 +26,9 @@ class TerminalManager:
         self.executor = ThreadPoolExecutor(max_workers=1)
         self.cols = 80
         self.rows = 24
+        # Buffer for terminal output (for screenshots without WebSocket)
+        self.output_buffer: List[str] = []
+        self.max_buffer_size = 10000  # Maximum lines to keep in buffer
     
     async def start(self):
         """Start the PTY and spawn a shell process."""
@@ -63,9 +66,8 @@ class TerminalManager:
                 os.close(self.slave_fd)
                 self.slave_fd = None
                 
-                # Set the master to non-blocking
-                flags = fcntl.fcntl(self.master_fd, fcntl.F_GETFL)
-                fcntl.fcntl(self.master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+                # Keep the master FD in blocking mode for reading in executor
+                # (Non-blocking mode would cause read() to return 0 immediately)
                 
                 # Set initial terminal size
                 self.resize_pty(self.cols, self.rows)
@@ -178,10 +180,16 @@ class TerminalManager:
                 
                 # Decode and process
                 text = chunk.decode('utf-8', errors='replace')
-                
+
+                # Store in buffer for screenshots
+                self.output_buffer.append(text)
+                # Trim buffer if it gets too large (keep last max_buffer_size items)
+                if len(self.output_buffer) > self.max_buffer_size:
+                    self.output_buffer = self.output_buffer[-self.max_buffer_size:]
+
                 # Broadcast to WebSocket clients
                 await self._broadcast(text)
-                
+
                 # Update the last output time
                 self.last_output_time = time.time()
                 self.output_event.set()
@@ -214,11 +222,11 @@ class TerminalManager:
         """Wait for the terminal output to stabilize."""
         stable_duration = 0.5  # Consider stable if no output for 500ms
         start_time = time.time()
-        
+
         while time.time() - start_time < timeout_seconds:
             # Clear the event
             self.output_event.clear()
-            
+
             # Wait for either output or timeout
             try:
                 await asyncio.wait_for(self.output_event.wait(), timeout=stable_duration)
@@ -226,7 +234,11 @@ class TerminalManager:
             except asyncio.TimeoutError:
                 # No output for stable_duration, we're stable
                 return
-            
+
             # Check if we've exceeded the total timeout
             if time.time() - start_time >= timeout_seconds:
                 return
+
+    def get_output_content(self) -> str:
+        """Get the current buffered terminal output."""
+        return ''.join(self.output_buffer)
