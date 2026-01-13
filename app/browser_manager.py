@@ -36,6 +36,9 @@ class BrowserManager:
                     '--disable-dev-shm-usage',
                     '--disable-gpu',
                     '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-software-rasterizer',
+                    '--single-process',  # Prevent multi-process crashes
                 ]
             )
 
@@ -89,23 +92,54 @@ class BrowserManager:
                 print(f"Navigating to {self.server_url}/static/terminal-screenshot.html")
                 await page.goto(f"{self.server_url}/static/terminal-screenshot.html", wait_until="load")
 
-                # Wait for xterm.js to load
-                print("Waiting for Terminal class...")
+                # Wait for xterm.js to load and initialize terminal in one call
+                print("Waiting for Terminal class and initializing...")
                 await page.wait_for_function("typeof Terminal !== 'undefined'", timeout=5000)
                 print("Terminal class loaded")
 
-                # Initialize terminal
-                print(f"Initializing terminal with size {cols}x{rows}")
-                init_result = await page.evaluate(f"window.initTerminal({cols}, {rows})")
-                print(f"Init result: {init_result}")
+                # Initialize and write content in a single evaluate call to avoid multiple round-trips
+                print(f"Initializing terminal ({cols}x{rows}) and writing {len(terminal_content)} bytes")
+                print(f"Content preview: {repr(terminal_content[:100] if terminal_content else '')}")
 
-                if not init_result:
-                    raise RuntimeError("Terminal initialization failed")
+                result = await page.evaluate("""
+                    ({ cols, rows, content }) => {
+                        try {
+                            // Initialize terminal
+                            const terminal = new Terminal({
+                                cursorBlink: true,
+                                cursorStyle: 'block',
+                                fontSize: 14,
+                                fontFamily: 'Courier New, monospace',
+                                theme: {
+                                    background: '#000000',
+                                    foreground: '#ffffff',
+                                    cursor: '#ffffff',
+                                },
+                                scrollback: 1000,
+                                convertEol: true,
+                                allowTransparency: false,
+                                cols: cols,
+                                rows: rows,
+                            });
 
-                # Write content to terminal
-                print(f"Writing {len(terminal_content)} bytes to terminal")
-                write_result = await page.evaluate("(content) => window.writeToTerminal(content)", terminal_content)
-                print(f"Write result: {write_result}")
+                            const container = document.getElementById('terminal');
+                            terminal.open(container);
+
+                            // Write content if provided
+                            if (content) {
+                                terminal.write(content);
+                            }
+
+                            return { success: true, contentLength: content ? content.length : 0 };
+                        } catch (error) {
+                            return { success: false, error: error.message };
+                        }
+                    }
+                """, {"cols": cols, "rows": rows, "content": terminal_content})
+
+                print(f"Result: {result}")
+                if not result.get("success"):
+                    raise RuntimeError(f"Terminal initialization failed: {result.get('error')}")
 
                 # Small delay to ensure rendering is complete
                 await asyncio.sleep(0.5)
