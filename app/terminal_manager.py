@@ -63,9 +63,8 @@ class TerminalManager:
                 os.close(self.slave_fd)
                 self.slave_fd = None
                 
-                # Set the master to non-blocking
-                flags = fcntl.fcntl(self.master_fd, fcntl.F_GETFL)
-                fcntl.fcntl(self.master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+                # Keep the master FD in blocking mode for reading in executor
+                # (Non-blocking mode would cause read() to return 0 immediately)
                 
                 # Set initial terminal size
                 self.resize_pty(self.cols, self.rows)
