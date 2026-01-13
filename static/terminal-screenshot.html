@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Terminal Screenshot</title>
+    <link rel="stylesheet" href="/lib/xterm.css" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        html, body {
+            width: 100%;
+            height: 100%;
+            background-color: #000000;
+            color: #ffffff;
+            font-family: 'Courier New', monospace;
+            overflow: hidden;
+        }
+        #terminal {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        .xterm {
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            color: #ffffff;
+            background-color: #000000;
+            padding: 0;
+            margin: 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="terminal"></div>
+
+    <script src="/lib/xterm.js"></script>
+    <script>
+        let terminal = null;
+
+        // Initialize terminal (called by Playwright)
+        window.initTerminal = function(cols, rows) {
+            console.log('Initializing terminal:', cols, 'x', rows);
+
+            terminal = new Terminal({
+                cursorBlink: true,
+                cursorStyle: 'block',
+                fontSize: 14,
+                fontFamily: 'Courier New, monospace',
+                theme: {
+                    background: '#000000',
+                    foreground: '#ffffff',
+                    cursor: '#ffffff',
+                },
+                scrollback: 1000,
+                convertEol: true,
+                allowTransparency: false,
+                cols: cols || 80,
+                rows: rows || 24,
+            });
+
+            const terminalContainer = document.getElementById('terminal');
+            terminal.open(terminalContainer);
+
+            console.log('Terminal initialized');
+            return true;
+        };
+
+        // Write content to terminal (called by Playwright)
+        window.writeToTerminal = function(content) {
+            if (!terminal) {
+                console.error('Terminal not initialized');
+                return false;
+            }
+
+            console.log('Writing to terminal:', content.length, 'bytes');
+            terminal.write(content);
+            return true;
+        };
+
+        // Check if terminal is ready
+        window.isTerminalReady = function() {
+            return terminal !== null;
+        };
+    </script>
+</body>
+</html>

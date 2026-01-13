@@ -167,12 +167,23 @@ async def mcp_screenshot():
     """Take a screenshot of the terminal."""
     if not browser_manager:
         raise HTTPException(status_code=503, detail="Browser manager not initialized")
-    
-    screenshot_path = await browser_manager.take_screenshot()
-    
+
+    if not terminal_manager:
+        raise HTTPException(status_code=503, detail="Terminal manager not initialized")
+
+    # Get the buffered terminal content
+    terminal_content = terminal_manager.get_output_content()
+
+    # Get terminal dimensions
+    cols = terminal_manager.cols
+    rows = terminal_manager.rows
+
+    # Take screenshot with the content
+    screenshot_path = await browser_manager.take_screenshot(terminal_content, cols, rows)
+
     if not screenshot_path or not os.path.exists(screenshot_path):
         raise HTTPException(status_code=500, detail="Failed to take screenshot")
-    
+
     # Return the screenshot as a PNG file
     return FileResponse(screenshot_path, media_type="image/png")
 
