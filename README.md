@@ -12,16 +12,25 @@ The system consists of three main components:
 
 ### Data Flow
 
+**For Screenshots:**
 ```
-LLM Agent
-    ↓
-HTTP/WebSocket Endpoints
-    ↓
-FastAPI Server
-    ├─→ PTY (bash shell)
-    └─→ Playwright Browser
-        └─→ Xterm.js Terminal Emulator
+LLM Agent → HTTP API → FastAPI Server → PTY → Output Buffer
+                                            ↓
+                                       Playwright
+                                            ↓
+                                  Xterm.js (direct injection)
+                                            ↓
+                                      PNG Screenshot
 ```
+
+**For Real-Time Terminal (Optional):**
+```
+LLM Agent → WebSocket → FastAPI Server → PTY
+                            ↓
+                    Browser with Xterm.js
+```
+
+**Note:** Screenshots do NOT require WebSocket connections. Terminal output is buffered in memory and injected directly into the browser via Playwright. See `docs/WEBSOCKET_DECISION.md` for details.
 
 ## Installation
 
@@ -230,23 +239,31 @@ ws.onmessage = (event) => {
 tui-mcp-server/
 ├── app/
 │   ├── __init__.py
-│   ├── main.py                 # FastAPI application and endpoints
-│   ├── terminal_manager.py     # PTY management
-│   └── browser_manager.py      # Playwright browser management
+│   ├── main.py                      # FastAPI application and endpoints
+│   ├── terminal_manager.py          # PTY management and output buffering
+│   └── browser_manager.py           # Playwright browser management
 ├── static/
-│   ├── index.html              # Frontend HTML
-│   └── main.js                 # Xterm.js integration
-├── requirements.txt            # Python dependencies
-└── README.md                   # This file
+│   ├── index.html                   # WebSocket-based real-time terminal UI
+│   ├── terminal-screenshot.html     # Screenshot page (no WebSocket)
+│   ├── main.js                      # Xterm.js WebSocket integration
+│   └── lib/                         # Xterm.js library files
+│       ├── xterm.js
+│       ├── xterm.css
+│       └── xterm-addon-fit.js
+├── docs/
+│   └── WEBSOCKET_DECISION.md        # Why WebSockets aren't needed for screenshots
+├── requirements.txt                 # Python dependencies
+└── README.md                        # This file
 ```
 
 ## Key Features
 
-- **High-Fidelity Screenshots:** Captures terminal output with colors and styling intact.
-- **Real-Time Terminal:** WebSocket-based real-time terminal interaction.
-- **PTY Management:** Proper pseudo-terminal handling with signal management.
+- **High-Fidelity Screenshots:** Captures terminal output with colors and styling intact using Playwright + Xterm.js.
+- **No WebSocket Required for Screenshots:** Direct content injection via Playwright for fast, reliable screenshots.
+- **Real-Time Terminal (Optional):** WebSocket-based real-time terminal interaction for interactive sessions.
+- **PTY Management:** Proper pseudo-terminal handling with signal management and output buffering.
 - **Asynchronous I/O:** Built on asyncio for efficient concurrent operations.
-- **Resize Support:** Terminal automatically resizes to browser viewport.
+- **Containerization-Ready:** Browser configured with single-process mode for containerized environments.
 - **Error Handling:** Robust error handling and logging.
 
 ## Troubleshooting
